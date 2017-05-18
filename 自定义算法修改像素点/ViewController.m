@@ -24,6 +24,11 @@
 }
 - (IBAction)whiteClick:(id)sender {
     _myImage.image = [ImageUtils imageProcess:_myImage.image];
+//    _myImage.image = [ImageUtils imageMosaic:_myImage.image];
+//     _myImage.image = [ImageUtils imageMosaic:_myImage.image blockLevel:25];
+}
+- (IBAction)masaikeClick:(id)sender {
+    self.myImage.image = [ImageUtils imageMosaic:_myImage.image blockLevel:25];
 }
 
 

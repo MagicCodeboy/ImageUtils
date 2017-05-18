@@ -7,9 +7,14 @@
 //  Copyright © 2017年 lsh. All rights reserved.
 //
 
+#define kBitsPerComponent (8)
+#define kBitsPerPixel (32)
+#define kPixelChannelCount (4)
+
 #import "ImageUtils.h"
 #import "Color.h"
 @implementation ImageUtils
+//美白
 +(UIImage *)imageProcess:(UIImage *)image{
     //第一步: 获取图片的大小
     CGImageRef imageRef = image.CGImage;
@@ -43,9 +48,9 @@
     //参数五： 每一行大小
     //如何计算(每八位 = 1字节)
     //第一点： 首先计算每一个像素点内存大小= ARGB = 8位* 4 = 4字节
-    //第二点： 一行内存大小 = 像素带你 * width = 4* width
+    //第二点： 一行内存大小 = 像素点 * width = 4* width
     //参数六： 颜色空间
-    //参数七： 是否需要透明度(布局排版方式)
+    //参数七： 是否需要透明度(布局排版方式) 分为大端字节序和小端字节序
     //kCGBitmapByteOrder32Big : 大端字节序
     CGContextRef contextRef = CGBitmapContextCreate(imagePixels, width, height, 8, 4 * width, colorSpaceRef, kCGImageAlphaPremultipliedLast|kCGBitmapByteOrder32Big);
     
@@ -104,5 +109,174 @@
     free(imagePixels);
     
     return newImage;
+}
+
+//马赛克（有问题，未解决）
++(UIImage *)imageMosaic:(UIImage *)image{
+    //分析实现的原理
+    //第一步 确定图片的大小
+    CGImageRef imageRef = image.CGImage;
+    NSUInteger width = CGImageGetWidth(imageRef);
+    NSUInteger height = CGImageGetHeight(imageRef);
+    
+    //第二步： 创建颜色空间（打码处理： 彩色图片、灰色图片）
+    //现在不知道图片到底是彩色还是灰色
+    //动态获取图片的颜色空间(方法) ---> 开源框架--->OpenCV 源码
+    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+    
+    //第三步： 创建图片的上下文
+    //参数， 数据源 宽 高 图像学中的ARGB分量大小（像素点分量大小： 8位 = 1字节） --> 固定  每一行的大小
+    CGContextRef contextRef = CGBitmapContextCreate(nil, width, height, 8, 4 * width, colorSpace, kCGImageAlphaPremultipliedLast);
+    
+    //第四步 ： 根据图片上下文绘制图片
+    CGContextDrawImage(contextRef, CGRectMake(0, 0, width, height), imageRef);
+    //第五步： 获取图片像素数组指针（将图片 --> 像素数组）
+    unsigned char *bitmapDataArray = (unsigned char *)CGBitmapContextGetData(contextRef);
+    //第六步 ： 马赛克算法
+    //实现算法
+    //每一个像素点4个通道（ARGB、四个通道）
+    //马赛克点大小 3*3矩形
+    NSUInteger currentIndex,preCurrentIndex,size = 15;
+    unsigned char* pixels[4] = {0};
+    //指定区域打码
+    /*
+     for (int i = 200 ; i < 370 - 1; i++) {
+     for (int j = 200; i< 370 - 1; j++) {
+     */
+    for (NSUInteger i = 200 ; i < height - 1; i++) {
+        for (NSUInteger j = 200; i < width - 1; j++) {
+            //筛选矩形区域 --> 指针位移
+            currentIndex = i * width + j;
+            if (i % size == 0) {
+                //处理宽(处理第一行 i = 0)
+                if (j % size == 0) {
+                     //矩形开始位置（左上角） C语言API --> 拷贝数据函数
+                    //参数一；目标 参数二 原始数据 参数三 长度（截取长度）
+                    memcpy(pixels, bitmapDataArray + 4*currentIndex, 4);
+                } else {
+                    //j % size == 1 --->第二个像素点
+                    //将左上角原点像素点值 --> 赋值给后面聚星区域像素点值
+                    memcpy(bitmapDataArray + 4 * currentIndex, pixels, 4);
+                }
+            } else {
+                //处理宽(处理第二行 i = 1)
+                //处理宽(处理第三行 i = 2)
+                //计算下标（作用： 为了我们拷贝数据提供下标）
+                //获取上一行第一个像素点值（相对的）
+                preCurrentIndex = (i - 1) * width + j;
+                //dsct 当前的像素点
+                //以此类推。。。。
+                memcpy(bitmapDataArray + 4 * currentIndex, bitmapDataArray + 4 * preCurrentIndex, 4);
+            }
+        }
+    }
+    //第七步： 将像素数组 --> iOS数据集合
+   CGDataProviderRef providerRef = CGDataProviderCreateWithData(NULL, bitmapDataArray, width * height * 4, NULL);
+    
+    //第八步： 创建马赛克的图片
+   CGImageRef masaicImageRef = CGImageCreate(width, height, 8, 4 * 8, width * 4, colorSpace, kCGImageAlphaPremultipliedLast, providerRef, NULL, NO, kCGRenderingIntentDefault);
+    //第九步： 创建图片马赛克上下文
+    CGContextRef outPutContextRef = CGBitmapContextCreate(nil, width, height, 8, 4 * width, colorSpace, kCGImageAlphaPremultipliedLast);
+    //第十步： 绘制马赛克图片
+    CGContextDrawImage(outPutContextRef, CGRectMake(0, 0, width, height), masaicImageRef);
+    
+    //创建输出图片
+   CGImageRef resultImageRef = CGBitmapContextCreateImage(outPutContextRef);
+    UIImage * resultImage = [UIImage imageWithCGImage:resultImageRef];
+    //第十二步： 释放内存
+    CGImageRelease(resultImageRef);
+    CGImageRelease(masaicImageRef);
+    CGColorSpaceRelease(colorSpace);
+    CGDataProviderRelease(providerRef);
+    CGContextRelease(contextRef);
+    CGContextRelease(outPutContextRef);
+    return resultImage;
+}
+//给图片打马赛克（已经实现）
++ (UIImage *)imageMosaic:(UIImage*)orginImage blockLevel:(NSUInteger)level
+{
+    //获取BitmapData
+    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+    CGImageRef imgRef = orginImage.CGImage;
+    CGFloat width = CGImageGetWidth(imgRef);
+    CGFloat height = CGImageGetHeight(imgRef);
+    CGContextRef context = CGBitmapContextCreate (nil,
+                                                  width,
+                                                  height,
+                                                  kBitsPerComponent,        //每个颜色值8bit
+                                                  width*kPixelChannelCount, //每一行的像素点占用的字节数，每个像素点的ARGB四个通道各占8个bit
+                                                  colorSpace,
+                                                  kCGImageAlphaPremultipliedLast);
+    CGContextDrawImage(context, CGRectMake(0, 0, width, height), imgRef);
+    unsigned char *bitmapData = CGBitmapContextGetData (context);
+    
+    //这里把BitmapData进行马赛克转换,就是用一个点的颜色填充一个level*level的正方形
+    unsigned char pixel[kPixelChannelCount] = {0};
+    NSUInteger index,preIndex;
+    for (NSUInteger i = 0; i < height - 1 ; i++) {
+        for (NSUInteger j = 0; j < width - 1; j++) {
+            index = i * width + j;
+            if (i % level == 0) {
+                if (j % level == 0) {
+                    memcpy(pixel, bitmapData + kPixelChannelCount*index, kPixelChannelCount);
+                }else{
+                    memcpy(bitmapData + kPixelChannelCount*index, pixel, kPixelChannelCount);
+                }
+            } else {
+                preIndex = (i-1)*width +j;
+                memcpy(bitmapData + kPixelChannelCount*index, bitmapData + kPixelChannelCount*preIndex, kPixelChannelCount);
+            }
+        }
+    }
+    
+    NSInteger dataLength = width*height* kPixelChannelCount;
+    CGDataProviderRef provider = CGDataProviderCreateWithData(NULL, bitmapData, dataLength, NULL);
+    //创建要输出的图像
+    CGImageRef mosaicImageRef = CGImageCreate(width, height,
+                                              kBitsPerComponent,
+                                              kBitsPerPixel,
+                                              width*kPixelChannelCount ,
+                                              colorSpace,
+                                              kCGImageAlphaPremultipliedLast,
+                                              provider,
+                                              NULL, NO,
+                                              kCGRenderingIntentDefault);
+    CGContextRef outputContext = CGBitmapContextCreate(nil,
+                                                       width,
+                                                       height,
+                                                       kBitsPerComponent,
+                                                       width*kPixelChannelCount,
+                                                       colorSpace,
+                                                       kCGImageAlphaPremultipliedLast);
+    CGContextDrawImage(outputContext, CGRectMake(0.0f, 0.0f, width, height), mosaicImageRef);
+    CGImageRef resultImageRef = CGBitmapContextCreateImage(outputContext);
+    UIImage *resultImage = nil;
+    if([UIImage respondsToSelector:@selector(imageWithCGImage:scale:orientation:)]) {
+        float scale = [[UIScreen mainScreen] scale];
+        resultImage = [UIImage imageWithCGImage:resultImageRef scale:scale orientation:UIImageOrientationUp];
+    } else {
+        resultImage = [UIImage imageWithCGImage:resultImageRef];
+    }
+    //释放
+    if(resultImageRef){
+        CFRelease(resultImageRef);
+    }
+    if(mosaicImageRef){
+        CFRelease(mosaicImageRef);
+    }
+    if(colorSpace){
+        CGColorSpaceRelease(colorSpace);
+    }
+    if(provider){
+        CGDataProviderRelease(provider);
+    }
+    if(context){
+        CGContextRelease(context);
+    }
+    if(outputContext){
+        CGContextRelease(outputContext);
+    }
+    return resultImage;
+    
 }
 @end
